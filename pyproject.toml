@@ -1,0 +1,54 @@
+[project]
+name = "disbeet"
+dynamic = ["version"]
+description = 'Discord Bot which integrates with beet for music library imports'
+readme = "README.md"
+requires-python = ">=3.8"
+keywords = []
+authors = [
+  { name = "Griff", email = "rickleg.93@gmail.com" },
+]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Programming Language :: Python",
+  "Programming Language :: Python :: 3.8",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: Implementation :: CPython",
+  "Programming Language :: Python :: Implementation :: PyPy",
+]
+dependencies = [
+    "beets",
+    "discord"
+]
+
+[project.scripts]
+disbeet="disbeet:main.main"
+
+[project.urls]
+Documentation = "https://github.com/unknown/disbeet#readme"
+Issues = "https://github.com/griffin-rickle/disbeet/issues"
+Source = "https://github.com/griffin-rickle/disbeet"
+
+[project.optional-dependencies]
+dev = [
+    "debugpy",
+    "pynvim",
+    "neovim",
+    "pylsp-mypy",
+    "python-lsp-isort",
+    "python-lsp-black"
+]
+
+[tool.mypy]
+disable_error_code = [
+    'import-untyped'
+]
+
+[tool.pylint]
+disable = [
+    'missing-module-docstring',
+    'missing-function-docstring'
+]
