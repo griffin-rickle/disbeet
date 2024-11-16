@@ -20,8 +20,9 @@ classifiers = [
   "Programming Language :: Python :: Implementation :: PyPy",
 ]
 dependencies = [
-    "beets",
-    "discord"
+    "beets==2.0.0",
+    "discord==2.3.2",
+    "pydantic==2.9.2"
 ]
 
 [project.scripts]
@@ -42,6 +43,9 @@ dev = [
     "python-lsp-black"
 ]
 
+[tool.black]
+line.length = 120
+
 [tool.mypy]
 disable_error_code = [
     'import-untyped'
@@ -50,5 +54,6 @@ disable_error_code = [
 [tool.pylint]
 disable = [
     'missing-module-docstring',
-    'missing-function-docstring'
+    'missing-function-docstring',
+    'missing-class-docstring'
 ]
