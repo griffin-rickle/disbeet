@@ -1,9 +1,8 @@
-import abc
 import json
 from pathlib import Path
-from typing import Any, Dict, Optional, Sequence, cast
+from typing import Any, Dict, List, Sequence, Tuple
 
-from discord import Client, Intents, Message, TextChannel
+from discord import Client, Intents, Message, TextChannel, Thread
 from pydantic import BaseModel, field_validator
 
 
@@ -23,6 +22,11 @@ class BotConfig(BaseModel):
 
 
 class Bot(Client):
+
+    import_channel: TextChannel
+    state_message: Message
+    import_threads: Dict[str, Tuple[Message, Thread]]
+
     def __init__(self, config_filepath: str):
         self._intents = self.initialize_intents()
         config_path = Path(config_filepath)
@@ -38,6 +42,7 @@ class Bot(Client):
             ) from e
 
         config_dict: Dict[str, Any]
+        self.import_threads = {}
         try:
             config_dict = json.loads(config)
         except Exception as e:
@@ -47,7 +52,6 @@ class Bot(Client):
 
         # TODO: Why does this not like when the type of config_dict is Dict[str, Union[str, int]]?
         self.config: BotConfig = BotConfig(**config_dict)
-        self.state_message = self.get_state_message()
         super().__init__(intents=self._intents)
 
     def initialize_intents(self) -> Intents:
@@ -59,21 +63,63 @@ class Bot(Client):
         super().run(self.config.token)
 
     async def on_ready(self) -> None:
+        self.import_channel = await self.get_import_channel()
+        self.state_message = await self.get_state_message()
         await self.publish_filesystem_udpate()
         print("bot ready!")
 
     async def on_message(self, message: Message) -> None:
-        if message.channel.id == self.config.import_channel_id:
-            await self.process_message(message)
+        if message.author.bot:
+            return
+        if (
+            message.channel.id == self.config.import_channel_id
+            and message.content.split()[0] == "!tag"
+        ):
+            await self.process_tagstart_message(message)
+        if isinstance(message.channel, Thread) and message.channel.name in self.import_threads:
+            await self.process_tagging_thread_message(message)
 
-    async def process_message(self, message: Message) -> None:
-        print(f"Received message: {message.author}: {message.content}")
+    async def process_tagging_thread_message(self, message: Message) -> None:
+        pass
+
+    async def process_tagstart_message(self, message: Message) -> None:
+        print(f"Received import message: {message.author}: {message.content}")
+        import_dir = " ".join(message.content.split()[1:])
+        existing_thread_info = self.import_threads.get(import_dir)
+        if existing_thread_info is not None:
+            creation_message, existing_thread = existing_thread_info
+            await message.reply(
+                f"An import thread was already started by {creation_message.author}: "
+                f"<#{existing_thread.id}>"
+            )
+            return
+        import_thread = await self.import_channel.create_thread(
+            name=f"{import_dir}"
+        )
+        self.import_threads[import_dir] = (message, import_thread)
+        thread_opening_message = f"""This is a thread for importing the directory {import_dir}
+This import was initiated by <@{message.author.id}>
+Your options are:
+- `show`: This command will list the files within the directory. 
+This is useful for seeing which tracks are contained within the directory
+- `manual`: This command will prompt you for an Artist, Album Name, and 
+Year for the album. After gathering that information, it will apply the 
+changes and use the filenames as song names (minus `.flac` and `.mp3`)
+- `auto`: I'm not really sure how this will work but there's existing 
+logic in the autotagger which I will look into and try to tap into.
+"""
+        await self.send_thread_message(import_thread, thread_opening_message)
+
+    async def send_thread_message(self, thread: Thread, message_content: str) -> None:
+        await thread.send(content=message_content)
 
     async def publish_filesystem_udpate(self) -> None:
-        # new_import_subdirs = await self.get_filesystem_listing()
-        # state_message = await self.get_state_message()
-        channel = await self.get_import_channel()
-        await channel.send("hello")
+        new_import_subdirs = await self.get_filesystem_listing()
+        state_message = await self.get_state_message()
+        print(f"found state message with content {state_message.content}")
+        await state_message.edit(
+            content=f"""Directories available for import:\n```{'\n'.join(new_import_subdirs)}```"""
+        )
 
     async def get_import_channel(self) -> TextChannel:
         my_guild = self.guilds[0]
@@ -93,17 +139,24 @@ class Bot(Client):
 
         return channel
 
-    async def get_state_message(self) -> Optional[Message]:
-        return None
-        # return await discord.utils.get(
-        #     self.get_guild(self.config.guild_id)
-        #     .get_channel(self.config.import_channel_id)
-        #     .history(limit=1, oldest_first=True)
-        # )
+    async def get_state_message(self) -> Message:
+        pinned_messages: List[Message] = await self.import_channel.pins()
+        if len(pinned_messages) > 1:
+            raise RuntimeError(
+                "More than one pinned message found in import channel "
+                f"{self.import_channel.name}"
+            )
+        if len(pinned_messages) == 0:
+            raise RuntimeError(
+                f"No pinned messages found in channel {self.import_channel.name}"
+            )
+        return pinned_messages[0]
 
-    async def get_filesystem_listing(self) -> Sequence[Path]:
-        return [
-            directory
-            for directory in self.config.new_imports_dir.iterdir()
-            if directory.is_dir()
-        ]
+    async def get_filesystem_listing(self) -> Sequence[str]:
+        return sorted(
+            [
+                directory.name
+                for directory in self.config.new_imports_dir.iterdir()
+                if directory.is_dir()
+            ]
+        )

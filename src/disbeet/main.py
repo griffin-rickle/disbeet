@@ -1,6 +1,5 @@
 import argparse
 
-# Set up python discord bot
 from disbeet._discord.bot import Bot
 
 
