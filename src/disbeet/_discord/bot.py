@@ -5,6 +5,8 @@ from typing import Any, Dict, List, Sequence, Tuple
 from discord import Client, Intents, Message, TextChannel, Thread
 from pydantic import BaseModel, field_validator
 
+from disbeet._discord.import_status import ImportContext, ImportStatus
+
 
 class BotConfig(BaseModel):
     app_id: str
@@ -42,7 +44,7 @@ class Bot(Client):
             ) from e
 
         config_dict: Dict[str, Any]
-        self.import_threads = {}
+        self.import_contexts: Dict[str, ImportContext] = {}
         try:
             config_dict = json.loads(config)
         except Exception as e:
@@ -76,11 +78,21 @@ class Bot(Client):
             and message.content.split()[0] == "!tag"
         ):
             await self.process_tagstart_message(message)
-        if isinstance(message.channel, Thread) and message.channel.name in self.import_threads:
-            await self.process_tagging_thread_message(message)
+        if (
+            isinstance(message.channel, Thread)
+            and message.channel.name in self.import_threads
+        ):
+            await self.process_tagging_thread_message(message.channel.name, message)
 
-    async def process_tagging_thread_message(self, message: Message) -> None:
-        pass
+    async def process_tagging_thread_message(
+        self, thread_name: str, message: Message
+    ) -> None:
+        if self.import_contexts[thread_name].status == ImportStatus.UNSTARTED:
+            # Expecting `manual` or `auto` here
+            pass
+        else:
+            # Expecting response to `manual` or `auto` here
+            pass
 
     async def process_tagstart_message(self, message: Message) -> None:
         print(f"Received import message: {message.author}: {message.content}")
@@ -93,25 +105,32 @@ class Bot(Client):
                 f"<#{existing_thread.id}>"
             )
             return
-        import_thread = await self.import_channel.create_thread(
-            name=f"{import_dir}"
+        import_thread = await self.import_channel.create_thread(name=f"{import_dir}")
+        self.import_contexts[import_dir] = ImportContext(
+            import_path=Path(self.config.new_imports_dir / import_dir),
+            initiating_message=message,
+            thread=import_thread,
         )
-        self.import_threads[import_dir] = (message, import_thread)
         thread_opening_message = f"""This is a thread for importing the directory {import_dir}
 This import was initiated by <@{message.author.id}>
 Your options are:
-- `show`: This command will list the files within the directory. 
-This is useful for seeing which tracks are contained within the directory
 - `manual`: This command will prompt you for an Artist, Album Name, and 
 Year for the album. After gathering that information, it will apply the 
 changes and use the filenames as song names (minus `.flac` and `.mp3`)
 - `auto`: I'm not really sure how this will work but there's existing 
 logic in the autotagger which I will look into and try to tap into.
+
+The contents of this directory are:
+```{self.dir_contents(import_dir)}```
 """
         await self.send_thread_message(import_thread, thread_opening_message)
 
     async def send_thread_message(self, thread: Thread, message_content: str) -> None:
         await thread.send(content=message_content)
+
+    def dir_contents(self, import_dir: str) -> str:
+        import_path = Path(self.config.new_imports_dir / import_dir)
+        return "\n\t" + "\n\t".join([file.name for file in import_path.iterdir()])
 
     async def publish_filesystem_udpate(self) -> None:
         new_import_subdirs = await self.get_filesystem_listing()
