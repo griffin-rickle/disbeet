@@ -2,10 +2,11 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List, Sequence, Tuple
 
+from beets.library import Item
 from discord import Client, Intents, Message, TextChannel, Thread
 from pydantic import BaseModel, field_validator
 
-from disbeet._discord.import_status import ImportContext, ImportStatus
+from disbeet._discord.import_context import ImportTransforms
 
 
 class BotConfig(BaseModel):
@@ -27,7 +28,7 @@ class Bot(Client):
 
     import_channel: TextChannel
     state_message: Message
-    import_threads: Dict[str, Tuple[Message, Thread]]
+    import_threads: Dict[str, ImportTransforms]
 
     def __init__(self, config_filepath: str):
         self._intents = self.initialize_intents()
@@ -44,7 +45,8 @@ class Bot(Client):
             ) from e
 
         config_dict: Dict[str, Any]
-        self.import_contexts: Dict[str, ImportContext] = {}
+        # TODO: Make a context manager for this?
+        self.import_threads: Dict[str, ImportTransforms] = {}
         try:
             config_dict = json.loads(config)
         except Exception as e:
@@ -87,43 +89,81 @@ class Bot(Client):
     async def process_tagging_thread_message(
         self, thread_name: str, message: Message
     ) -> None:
-        if self.import_contexts[thread_name].status == ImportStatus.UNSTARTED:
-            # Expecting `manual` or `auto` here
-            pass
-        else:
-            # Expecting response to `manual` or `auto` here
-            pass
+        pass
+        # if self.import_contexts[thread_name].status == ImportStatus.UNSTARTED:
+        #     # Expecting `manual` or `auto` here
+        #     pass
+        # else:
+        #     # Expecting response to `manual` or `auto` here
+        #     pass
 
     async def process_tagstart_message(self, message: Message) -> None:
         print(f"Received import message: {message.author}: {message.content}")
         import_dir = " ".join(message.content.split()[1:])
         existing_thread_info = self.import_threads.get(import_dir)
         if existing_thread_info is not None:
-            creation_message, existing_thread = existing_thread_info
+            existing_thread = existing_thread_info.thread
+            creation_message = existing_thread_info.initiating_message
             await message.reply(
                 f"An import thread was already started by {creation_message.author}: "
                 f"<#{existing_thread.id}>"
             )
             return
         import_thread = await self.import_channel.create_thread(name=f"{import_dir}")
-        self.import_contexts[import_dir] = ImportContext(
+        self.import_threads[import_dir] = ImportTransforms(
             import_path=Path(self.config.new_imports_dir / import_dir),
             initiating_message=message,
             thread=import_thread,
         )
         thread_opening_message = f"""This is a thread for importing the directory {import_dir}
-This import was initiated by <@{message.author.id}>
-Your options are:
-- `manual`: This command will prompt you for an Artist, Album Name, and 
-Year for the album. After gathering that information, it will apply the 
-changes and use the filenames as song names (minus `.flac` and `.mp3`)
-- `auto`: I'm not really sure how this will work but there's existing 
-logic in the autotagger which I will look into and try to tap into.
+This import was initiated by <@{message.author.id}>"""
+        await self.send_thread_message(import_thread, thread_opening_message)
+        thread_second_message = """
+The available options which will queue changes for all items in the directory are:
+- `allalbum`: This will queue an update to the album of all of the tracks in this directory
+- `allyear`: This will queue an update to the year of all of the tracks in this directory
+- `allartist`: This will queue an update to the artist of all of the tracks in this directory
+The available options which will queue changes for specific tracks are:
+- `album <new album>`: This will queue an update to the album of the file to the given new album name
+- `year <new year>`: This will queue an update to the year of the file to the given new year
+- `artist <new artist>`: This will queue an update to the artist of the file to the given new artist
+- `title <new title>`: This will change the track title of the given filename to the given new title 
+- `track <new track number>`: This will change the track number of the given filename to the given track number
 
+To use these options, reply to the metadata message of the file you are targeting.
+
+The meta-options include:
+- `show`: This shows the current transforms which are queued
+- `import`: This triggers the import
+"""
+        await self.send_thread_message(import_thread, thread_second_message)
+
+        thread_third_message = f"""
 The contents of this directory are:
 ```{self.dir_contents(import_dir)}```
+The metadata for each of the files is as follows:
 """
-        await self.send_thread_message(import_thread, thread_opening_message)
+        await self.send_thread_message(import_thread, thread_third_message)
+
+        for item in self.get_directory_metadata_str(
+            Path(self.config.new_imports_dir / import_dir)
+        ):
+            await self.send_thread_message(import_thread, item)
+
+    def get_directory_metadata_str(self, directory: Path) -> List[str]:
+        items = [
+            (path, Item.from_path(path.resolve()))
+            for path in Path(directory).iterdir()
+            if path.is_file()
+        ]
+        return [self.get_item_summary(filepath, item) for filepath, item in items]
+
+    def get_item_summary(self, filepath: Path, item: Item) -> str:
+        fields = ["artist", "year", "album", "track", "title"]
+        item_summary = f"{filepath.name}" + "".join(
+            [f"\n\t{field}: {item.get(field)}" for field in fields]
+        )
+        return f"""```{item_summary}```"""
 
     async def send_thread_message(self, thread: Thread, message_content: str) -> None:
         await thread.send(content=message_content)
